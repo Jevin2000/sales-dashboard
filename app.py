@@ -447,7 +447,6 @@ def summary():
         return {}
 
 
-
     df=pd.DataFrame(data)
 
 
@@ -456,9 +455,7 @@ def summary():
     )
 
 
-
     now=pd.Timestamp.now()
-
 
 
     return {
@@ -573,7 +570,6 @@ def product_rank():
     )
 
 
-
     return [
 
         {
@@ -638,6 +634,8 @@ def customer_rank():
         for k,v in result.items()
 
     ]
+
+
 # =====================================================
 # 企业驾驶舱HTML
 # =====================================================
@@ -875,8 +873,6 @@ opacity:.85;
 
 
 }
-
-
 .file-name{
 
 
@@ -1080,8 +1076,6 @@ height:300px;
 
 }
 
-
-
 /* =============================
 底部分析
 ============================= */
@@ -1191,9 +1185,9 @@ grid-template-columns:1fr;
 }
 
 
+
+
 }
-
-
 
 
 </style>
@@ -1280,7 +1274,7 @@ grid-template-columns:1fr;
 <div>
 
 
-<span id="fileName"
+<span id="fileNameDisplay"
 class="file-name">
 
 未选择文件
@@ -1305,7 +1299,7 @@ style="display:none">
 
 class="upload-btn"
 
-onclick="fileInput.click()">
+onclick="document.getElementById('fileInput').click()">
 
 选择Excel
 
@@ -1602,7 +1596,6 @@ class="chart small-chart">
 
 
 
-
 <div class="bottom-grid">
 
 
@@ -1674,37 +1667,26 @@ class="chart small-chart">
 <script>
 
 
+// =============================
 // 时间
+// =============================
 
-
-setInterval(()=>{
-
-
-document.getElementById("clock")
-.innerHTML =
-new Date()
-.toLocaleString();
-
-
-},1000);
-
-
-
-<script>
+setInterval(function(){
+    document.getElementById("clock").innerHTML = new Date().toLocaleString();
+}, 1000);
 
 
 // =============================
 // 文件选择
 // =============================
 
-
-fileInput.addEventListener(
+document.getElementById('fileInput').addEventListener(
 "change",
 function(){
 
 if(this.files.length){
 
-fileName.innerHTML =
+document.getElementById('fileNameDisplay').innerHTML =
 this.files[0].name;
 
 }
@@ -1725,7 +1707,7 @@ async function uploadFile(){
 
 
 let file =
-fileInput.files[0];
+document.getElementById('fileInput').files[0];
 
 
 if(!file){
@@ -1737,7 +1719,6 @@ alert(
 return;
 
 }
-
 
 
 let formData =
@@ -1763,9 +1744,7 @@ method:"POST",
 
 body:formData
 
-}
-
-);
+});
 
 
 
@@ -1819,7 +1798,6 @@ alert(
 
 
 
-
 // =============================
 // 数字格式化
 // =============================
@@ -1838,8 +1816,6 @@ return Number(num)
 
 
 }
-
-
 
 
 
@@ -1866,43 +1842,42 @@ await res.json();
 
 
 
-
-k1.innerHTML =
+document.getElementById('k1').innerHTML =
 formatNumber(
 d.今日销量
 );
 
 
 
-k2.innerHTML =
+document.getElementById('k2').innerHTML =
 formatNumber(
 d.本月销量
 );
 
 
 
-k3.innerHTML =
+document.getElementById('k3').innerHTML =
 formatNumber(
 d.本年销量
 );
 
 
 
-k4.innerHTML =
+document.getElementById('k4').innerHTML =
 formatNumber(
 d.今日销售额/10000
 );
 
 
 
-k5.innerHTML =
+document.getElementById('k5').innerHTML =
 formatNumber(
 d.本月销售额/10000
 );
 
 
 
-k6.innerHTML =
+document.getElementById('k6').innerHTML =
 formatNumber(
 d.本年销售额/10000
 );
@@ -1910,8 +1885,6 @@ d.本年销售额/10000
 
 
 }
-
-
 
 
 
@@ -2010,7 +1983,6 @@ rotate:25
 },
 
 
-
 yAxis:{
 
 
@@ -2044,16 +2016,8 @@ color:"#bdd"
 
 }
 
-
-
-
 }
-
-
-
 }
-
-
 
 
 
@@ -2108,8 +2072,7 @@ let chart =
 echarts.init(
 document.getElementById(
 "trendChart"
-)
-);
+));
 
 
 
@@ -2178,11 +2141,12 @@ option
 
 
 window.onresize =
-()=>chart.resize();
+function(){ chart.resize(); };
 
 
 
 }
+
 
 
 
@@ -2211,13 +2175,11 @@ await res.json();
 
 
 
-
 let chart =
 echarts.init(
 document.getElementById(
 "amountChart"
-)
-);
+));
 
 
 
@@ -2259,8 +2221,6 @@ color:"#3fa66b",
 borderRadius:
 [6,6,0,0]
 
-}
-
 
 
 }];
@@ -2273,8 +2233,11 @@ option
 
 
 
-}
+window.onresize =
+function(){ chart.resize(); };
 
+
+}
 
 
 
@@ -2296,20 +2259,20 @@ await fetch(
 "/api/data"
 )
 .then(
-r=>r.json()
+function(r){ return r.json(); }
 );
 
 
 
-let month={};
+var month={};
 
 
 
 data.forEach(
-x=>{
+function(x){
 
 
-let m=
+var m=
 x.日期.substring(0,7);
 
 
@@ -2319,71 +2282,38 @@ month[m]=
 +
 x.总销量;
 
-
-
 }
 
 );
 
 
 
-let chart =
+var chart =
 echarts.init(
 document.getElementById(
 "monthChart"
-)
-);
+));
 
 
 
-chart.setOption({
-
-
-...baseOption(),
-
-
-xAxis:{
-
-
-type:"category",
-
-
-data:Object.keys(month),
-
-
-axisLabel:{
-color:"#bdd"
-}
-
-
-},
-
-
-series:[{
-
+var opt = baseOption();
+opt.xAxis.data = Object.keys(month);
+opt.series = [{
 type:"bar",
-
 data:Object.values(month),
-
-
 itemStyle:{
-
-
 color:"#4da3ff",
-
-
-borderRadius:
-[6,6,0,0]
-
+borderRadius:[6,6,0,0]
 }
+}];
 
 
-}]
+chart.setOption(opt);
 
 
 
-});
-
+window.onresize =
+function(){ chart.resize(); };
 
 
 }
@@ -2403,25 +2333,25 @@ async function loadYear(){
 
 
 
-let data =
+var data =
 await fetch(
 "/api/data"
 )
 .then(
-r=>r.json()
+function(r){ return r.json(); }
 );
 
 
 
-let year={};
+var year={};
 
 
 
 data.forEach(
-x=>{
+function(x){
 
 
-let y=
+var y=
 x.日期.substring(0,4);
 
 
@@ -2430,72 +2360,38 @@ year[y]=
 +
 x.总销量;
 
-
-
 }
 
 );
 
 
 
-
-let chart =
+var chart =
 echarts.init(
 document.getElementById(
 "yearChart"
-)
-);
+));
 
 
 
-chart.setOption({
-
-
-...baseOption(),
-
-
-xAxis:{
-
-
-type:"category",
-
-data:Object.keys(year),
-
-
-axisLabel:{
-color:"#bdd"
-}
-
-
-},
-
-
-
-series:[{
-
+var opt = baseOption();
+opt.xAxis.data = Object.keys(year);
+opt.series = [{
 type:"bar",
-
 data:Object.values(year),
-
-
 itemStyle:{
-
-
 color:"#f3c65a",
-
-
-borderRadius:
-[6,6,0,0]
-
+borderRadius:[6,6,0,0]
 }
+}];
 
 
-}]
+chart.setOption(opt);
 
 
 
-});
-
+window.onresize =
+function(){ chart.resize(); };
 
 
 }
@@ -2515,99 +2411,55 @@ async function loadRank(){
 
 
 
-let product =
+var product =
 await fetch(
 "/api/product_rank"
 )
 .then(
-r=>r.json()
+function(r){ return r.json(); }
 );
 
 
 
-let customer =
+var customer =
 await fetch(
 "/api/customer_rank"
 )
 .then(
-r=>r.json()
+function(r){ return r.json(); }
 );
 
 
 
-
-productRank.innerHTML =
-product.map(
-(x,i)=>
-
-`
-
-<div class="rank-item">
-
-<span>
-
-${i+1}.
-${x.name}
-
-</span>
-
-
-<b>
-
-${formatNumber(x.value)}
-吨
-
-</b>
-
-
-</div>
-
-
-`
-
-).join("");
+var productHTML = "";
+for(var i=0; i<product.length; i++){
+    productHTML +=
+    '<div class="rank-item">' +
+    '<span>' + (i+1) + '. ' + product[i].name + '</span>' +
+    '<b>' + formatNumber(product[i].value) + ' 吨</b>' +
+    '</div>';
+}
+if(productHTML === ""){
+    productHTML = "暂无数据";
+}
+document.getElementById('productRank').innerHTML = productHTML;
 
 
 
-
-customerRank.innerHTML =
-customer.map(
-(x,i)=>
-
-`
-
-<div class="rank-item">
-
-
-<span>
-
-${i+1}.
-${x.name}
-
-</span>
-
-
-<b>
-
-${formatNumber(
-x.value/10000
-)}
-万元
-
-</b>
-
-
-</div>
-
-
-`
-
-).join("");
-
-
+var customerHTML = "";
+for(var i=0; i<customer.length; i++){
+    customerHTML +=
+    '<div class="rank-item">' +
+    '<span>' + (i+1) + '. ' + customer[i].name + '</span>' +
+    '<b>' + formatNumber(customer[i].value/10000) + ' 万元</b>' +
+    '</div>';
+}
+if(customerHTML === ""){
+    customerHTML = "暂无数据";
+}
+document.getElementById('customerRank').innerHTML = customerHTML;
 
 }
-
 
 
 
@@ -2640,15 +2492,12 @@ loadYear();
 loadRank();
 
 
-
 }
 
 
 
 
-
 loadAll();
-
 
 
 </script>
@@ -2659,7 +2508,6 @@ loadAll();
 </html>
 
 """
-
 
 
 
@@ -2679,7 +2527,6 @@ def home():
     return HTMLResponse(
         HTML_PAGE
     )
-
 
 
 
@@ -2704,6 +2551,3 @@ if __name__=="__main__":
         port=8000
 
     )
-
-
-"""
