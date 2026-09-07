@@ -1,16 +1,27 @@
 import os
 import io
+import re
 import pandas as pd
+
+from datetime import datetime
+
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+
 from pymongo import MongoClient
-from datetime import datetime
-import re
 
-app = FastAPI()
 
-# 允许跨域
+# =====================================================
+# FastAPI
+# =====================================================
+
+app = FastAPI(
+    title="西瑞集团经营数据驾驶舱",
+    version="2.0"
+)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,341 +29,2681 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- 连接MongoDB ----------
-MONGO_URI = os.getenv("MONGO_URI")
+
+
+# =====================================================
+# MongoDB
+# =====================================================
+
+MONGO_URI = os.getenv(
+    "MONGO_URI",
+    "mongodb://localhost:27017"
+)
+
+
 client = MongoClient(MONGO_URI)
+
 db = client["sales_dashboard"]
+
 collection = db["daily_sales"]
 
-# ---------- 智能解析Excel ----------
-def parse_excel(df):
-    """自动识别列名，提取日期、销量、销售额"""
-    # 查找日期列（包含'日期'、'时间'、'date'等字样）
-    date_col = None
-    for col in df.columns:
-        if any(keyword in str(col).lower() for keyword in ['日期', '时间', 'date', '业务日期', '单据日期']):
-            date_col = col
-            break
-    if date_col is None:
-        # 如果找不到，尝试第二列（很多金蝶导出日期在第二列）
-        if len(df.columns) >= 2:
-            date_col = df.columns[1]
-        else:
-            raise ValueError("无法找到日期列，请确保Excel包含日期信息")
-    
-    # 查找数量列（包含'数量'、'销量'、'出库数量'等）
-    qty_col = None
-    for col in df.columns:
-        if any(keyword in str(col).lower() for keyword in ['数量', '销量', '出库数量', 'qty']):
-            qty_col = col
-            break
-    if qty_col is None:
-        # 尝试第5列（常见位置）
-        if len(df.columns) >= 5:
-            qty_col = df.columns[4]
-        else:
-            raise ValueError("无法找到数量列")
-    
-    # 查找金额列（包含'金额'、'销售额'、'价税合计'等）
-    amt_col = None
-    for col in df.columns:
-        if any(keyword in str(col).lower() for keyword in ['金额', '销售额', '价税合计', 'amount']):
-            amt_col = col
-            break
-    if amt_col is None:
-        # 尝试第6列
-        if len(df.columns) >= 6:
-            amt_col = df.columns[5]
-        else:
-            amt_col = qty_col  # 如果没有金额列，就用数量代替（避免报错）
-    
-    # 提取数据
-    df_clean = df[[date_col, qty_col, amt_col]].copy()
-    df_clean.columns = ["日期", "销量", "销售额"]
-    
-    # 智能解析日期（尝试多种格式）
-    def parse_date(val):
-        if pd.isna(val):
-            return pd.NaT
-        if isinstance(val, (pd.Timestamp, datetime)):
-            return val
-        # 如果是类似 "20260906" 的纯数字
-        if isinstance(val, (int, float)):
-            val = str(int(val))
-        # 尝试常见格式
-        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y%m%d", "%y-%m-%d", "%d-%m-%Y", "%m-%d-%Y"]:
-            try:
-                return pd.to_datetime(val, format=fmt)
-            except:
-                continue
+raw_collection = db["raw_sales"]
+
+
+
+# =====================================================
+# Excel字段智能识别
+# =====================================================
+
+
+def find_column(columns, keywords):
+
+    for col in columns:
+
+        text = str(col).lower()
+
+        for k in keywords:
+
+            if k.lower() in text:
+                return col
+
+    return None
+
+
+
+# =====================================================
+# 日期解析
+# =====================================================
+
+
+def parse_date(value):
+
+    if pd.isna(value):
+        return pd.NaT
+
+
+    if isinstance(value, datetime):
+        return value
+
+
+    if isinstance(value, pd.Timestamp):
+        return value
+
+
+
+    value = str(value)
+
+
+
+    formats = [
+
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y%m%d",
+        "%Y.%m.%d",
+        "%d-%m-%Y"
+
+    ]
+
+
+    for fmt in formats:
+
         try:
-            return pd.to_datetime(val, errors='coerce')
+
+            return pd.to_datetime(
+                value,
+                format=fmt
+            )
+
         except:
-            return pd.NaT
-    
-    df_clean["日期"] = df_clean["日期"].apply(parse_date)
-    df_clean = df_clean.dropna(subset=["日期"])
-    
-    # 确保数值类型
-    df_clean["销量"] = pd.to_numeric(df_clean["销量"], errors='coerce').fillna(0)
-    df_clean["销售额"] = pd.to_numeric(df_clean["销售额"], errors='coerce').fillna(0)
-    
-    # 按日汇总
-    daily = df_clean.groupby(df_clean["日期"].dt.date).agg({
-        "销量": "sum",
-        "销售额": "sum"
-    }).reset_index()
-    daily.columns = ["日期", "总销量", "总销售额"]
-    return daily
 
-# ---------- 上传Excel ----------
+            pass
+
+
+
+    return pd.to_datetime(
+        value,
+        errors="coerce"
+    )
+
+
+
+# =====================================================
+# Excel解析核心
+# =====================================================
+
+
+def parse_excel(df):
+
+
+    columns = df.columns
+
+
+
+    # 日期
+
+    date_col = find_column(
+        columns,
+        [
+            "日期",
+            "时间",
+            "date",
+            "业务日期",
+            "单据日期"
+        ]
+    )
+
+
+    if not date_col:
+
+        date_col = columns[0]
+
+
+
+    # 数量
+
+    qty_col = find_column(
+        columns,
+        [
+            "数量",
+            "销量",
+            "出库数量",
+            "qty",
+            "吨"
+        ]
+    )
+
+
+    if not qty_col:
+
+        qty_col = columns[4]
+
+
+
+    # 金额
+
+    amt_col = find_column(
+        columns,
+        [
+            "金额",
+            "销售额",
+            "价税合计",
+            "amount",
+            "含税"
+        ]
+    )
+
+
+    if not amt_col:
+
+        amt_col = columns[5]
+
+
+
+    # 产品
+
+    product_col = find_column(
+        columns,
+        [
+            "产品",
+            "物料",
+            "商品",
+            "品种"
+        ]
+    )
+
+
+    # 客户
+
+    customer_col = find_column(
+        columns,
+        [
+            "客户",
+            "购货单位",
+            "单位",
+            "往来单位"
+        ]
+    )
+
+
+
+    result = pd.DataFrame()
+
+
+
+    result["日期"] = (
+        df[date_col]
+        .apply(parse_date)
+    )
+
+
+    result["销量"] = pd.to_numeric(
+        df[qty_col],
+        errors="coerce"
+    ).fillna(0)
+
+
+
+    result["销售额"] = pd.to_numeric(
+        df[amt_col],
+        errors="coerce"
+    ).fillna(0)
+
+
+
+    if product_col:
+
+        result["产品"] = (
+            df[product_col]
+            .astype(str)
+        )
+
+    else:
+
+        result["产品"] = "未知产品"
+
+
+
+    if customer_col:
+
+        result["客户"] = (
+            df[customer_col]
+            .astype(str)
+        )
+
+    else:
+
+        result["客户"] = "未知客户"
+
+
+
+
+    result = result.dropna(
+        subset=["日期"]
+    )
+
+
+
+    return result
+
+
+
+
+# =====================================================
+# 上传Excel
+# =====================================================
+
+
 @app.post("/upload")
-async def upload_excel(file: UploadFile = File(...)):
-    try:
-        content = await file.read()
-        df = pd.read_excel(io.BytesIO(content))
-        daily = parse_excel(df)
-        
-        # 存入MongoDB
-        collection.delete_many({})
-        records = daily.to_dict("records")
-        for r in records:
-            r["日期"] = r["日期"].strftime("%Y-%m-%d")
-        collection.insert_many(records)
-        
-        return JSONResponse({
-            "success": True,
-            "message": f"成功上传 {len(records)} 天数据",
-            "count": len(records)
-        })
-    except Exception as e:
-        return JSONResponse({
-            "success": False,
-            "message": str(e)
-        }, status_code=400)
+async def upload_excel(
+    file: UploadFile = File(...)
+):
 
-# ---------- API ----------
+    try:
+
+
+        content = await file.read()
+
+
+
+        df = pd.read_excel(
+            io.BytesIO(content)
+        )
+
+
+
+        data = parse_excel(df)
+
+
+
+        # 保存原始数据
+
+        raw_collection.delete_many({})
+
+        raw_collection.insert_many(
+            data.to_dict("records")
+        )
+
+
+
+        # 日汇总
+
+        daily = (
+
+            data
+            .groupby(
+                data["日期"].dt.date
+            )
+            .agg(
+                {
+                    "销量":"sum",
+                    "销售额":"sum"
+                }
+            )
+            .reset_index()
+
+        )
+
+
+        daily.columns = [
+            "日期",
+            "总销量",
+            "总销售额"
+        ]
+
+
+
+        collection.delete_many({})
+
+
+
+        records = (
+            daily
+            .to_dict("records")
+        )
+
+
+        for r in records:
+
+            r["日期"] = (
+                str(r["日期"])
+            )
+
+
+
+        collection.insert_many(
+            records
+        )
+
+
+
+        return {
+
+            "success":True,
+
+            "message":
+            f"成功导入 {len(records)} 天数据"
+
+        }
+
+
+
+    except Exception as e:
+
+
+        return JSONResponse(
+
+            {
+                "success":False,
+                "message":str(e)
+            },
+
+            status_code=400
+
+        )
+
+
+
+# =====================================================
+# 基础数据接口
+# =====================================================
+
+
 @app.get("/api/data")
 def get_data():
-    data = list(collection.find({}, {"_id": 0}))
-    return JSONResponse(data)
+
+
+    data = list(
+        collection.find(
+            {},
+            {"_id":0}
+        )
+    )
+
+
+    return data
+
+
+
+# =====================================================
+# KPI接口
+# =====================================================
+
 
 @app.get("/api/summary")
-def get_summary():
-    data = list(collection.find({}, {"_id": 0}))
-    if not data:
-        return JSONResponse({"今日销量": 0, "本月销量": 0, "本年销量": 0, "今日销售额": 0, "本月销售额": 0, "本年销售额": 0})
-    df = pd.DataFrame(data)
-    df["日期"] = pd.to_datetime(df["日期"])
-    today = pd.Timestamp.now().date()
-    return JSONResponse({
-        "今日销量": int(df[df["日期"].dt.date == today]["总销量"].sum()),
-        "本月销量": int(df[df["日期"].dt.month == today.month]["总销量"].sum()),
-        "本年销量": int(df[df["日期"].dt.year == today.year]["总销量"].sum()),
-        "今日销售额": int(df[df["日期"].dt.date == today]["总销售额"].sum()),
-        "本月销售额": int(df[df["日期"].dt.month == today.month]["总销售额"].sum()),
-        "本年销售额": int(df[df["日期"].dt.year == today.year]["总销售额"].sum()),
-    })
+def summary():
 
-# ---------- 大屏HTML ----------
-HTML_PAGE = """
+
+    data=list(
+        collection.find(
+            {},
+            {"_id":0}
+        )
+    )
+
+
+    if not data:
+
+        return {}
+
+
+
+    df=pd.DataFrame(data)
+
+
+    df["日期"]=pd.to_datetime(
+        df["日期"]
+    )
+
+
+
+    now=pd.Timestamp.now()
+
+
+
+    return {
+
+
+        "今日销量":
+
+        int(
+            df[
+                df["日期"].dt.date
+                ==
+                now.date()
+            ]["总销量"].sum()
+        ),
+
+
+        "本月销量":
+
+        int(
+            df[
+                df["日期"].dt.month
+                ==
+                now.month
+            ]["总销量"].sum()
+        ),
+
+
+        "本年销量":
+
+        int(
+            df[
+                df["日期"].dt.year
+                ==
+                now.year
+            ]["总销量"].sum()
+        ),
+
+
+
+        "今日销售额":
+
+        float(
+            df[
+                df["日期"].dt.date
+                ==
+                now.date()
+            ]["总销售额"].sum()
+        ),
+
+
+        "本月销售额":
+
+        float(
+            df[
+                df["日期"].dt.month
+                ==
+                now.month
+            ]["总销售额"].sum()
+        ),
+
+
+        "本年销售额":
+
+        float(
+            df[
+                df["日期"].dt.year
+                ==
+                now.year
+            ]["总销售额"].sum()
+        )
+
+    }
+
+
+
+# =====================================================
+# 产品排行
+# =====================================================
+
+
+@app.get("/api/product_rank")
+def product_rank():
+
+
+    data=list(
+        raw_collection.find(
+            {},
+            {"_id":0}
+        )
+    )
+
+
+    if not data:
+
+        return []
+
+
+
+    df=pd.DataFrame(data)
+
+
+    result=(
+
+        df.groupby("产品")
+        ["销量"]
+        .sum()
+        .sort_values(
+            ascending=False
+        )
+        .head(10)
+
+    )
+
+
+
+    return [
+
+        {
+            "name":k,
+            "value":float(v)
+        }
+
+        for k,v in result.items()
+
+    ]
+
+
+
+# =====================================================
+# 客户排行
+# =====================================================
+
+
+@app.get("/api/customer_rank")
+def customer_rank():
+
+
+    data=list(
+        raw_collection.find(
+            {},
+            {"_id":0}
+        )
+    )
+
+
+    if not data:
+
+        return []
+
+
+
+    df=pd.DataFrame(data)
+
+
+
+    result=(
+
+        df.groupby("客户")
+        ["销售额"]
+        .sum()
+        .sort_values(
+            ascending=False
+        )
+        .head(10)
+
+    )
+
+
+
+    return [
+
+        {
+            "name":k,
+            "value":float(v)
+        }
+
+        for k,v in result.items()
+
+    ]
+# =====================================================
+# 企业驾驶舱HTML
+# =====================================================
+
+
+HTML_PAGE = r"""
+
 <!DOCTYPE html>
+
 <html lang="zh-CN">
+
+
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=1920, initial-scale=1.0">
-    <title>产销量数据大屏</title>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-    <style>
-        *{margin:0;padding:0;box-sizing:border-box}
-        body{background:radial-gradient(ellipse at center,#0a0e27,#030514);color:#e0e0e0;font-family:'Microsoft YaHei',Arial,sans-serif;padding:30px;min-height:100vh}
-        .dashboard{max-width:1920px;margin:0 auto}
-        .header{text-align:center;padding:20px 0 30px;border-bottom:2px solid rgba(74,95,193,0.3);margin-bottom:30px}
-        .header h1{font-size:48px;font-weight:700;background:linear-gradient(to right,#4a5fc1,#7986cb,#4a5fc1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:8px}
-        .header .sub{color:#7986cb;font-size:18px;letter-spacing:4px;margin-top:8px;opacity:0.7}
-        .upload-area{background:rgba(20,22,40,0.8);border:2px dashed rgba(121,134,203,0.3);border-radius:16px;padding:30px 40px;margin-bottom:30px;display:flex;align-items:center;justify-content:space-between;backdrop-filter:blur(10px);transition:border-color 0.3s}
-        .upload-area:hover{border-color:rgba(121,134,203,0.6)}
-        .upload-area .left{display:flex;align-items:center;gap:20px}
-        .upload-area .left .icon{font-size:40px;color:#7986cb}
-        .upload-area .left .info .title{color:#e0e0e0;font-size:18px;font-weight:600}
-        .upload-area .left .info .desc{color:#7986cb;font-size:14px;margin-top:4px}
-        .upload-area .right{display:flex;align-items:center;gap:15px}
-        .file-btn{background:linear-gradient(135deg,#4a5fc1,#7986cb);color:#fff;border:none;padding:12px 32px;border-radius:10px;font-size:16px;cursor:pointer;transition:all 0.3s;font-weight:600}
-        .file-btn:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(74,95,193,0.4)}
-        .file-input{display:none}
-        .upload-btn{background:linear-gradient(135deg,#ffd54f,#ffb300);color:#1a1a2e;border:none;padding:12px 40px;border-radius:10px;font-size:16px;cursor:pointer;transition:all 0.3s;font-weight:700}
-        .upload-btn:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(255,213,79,0.4)}
-        .upload-btn:disabled{opacity:0.4;cursor:not-allowed;transform:none}
-        .file-name{color:#4fc3f7;font-size:14px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        .upload-status{margin-top:12px;text-align:center;font-size:15px}
-        .upload-status.success{color:#81c784}
-        .upload-status.error{color:#ef5350}
-        .upload-status.loading{color:#ffd54f}
-        .kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:20px;margin-bottom:30px}
-        .kpi-card{background:rgba(20,22,40,0.85);border-radius:16px;padding:24px 20px;text-align:center;border:1px solid rgba(121,134,203,0.25);box-shadow:0 8px 32px rgba(0,0,0,0.5);backdrop-filter:blur(10px);transition:transform 0.3s}
-        .kpi-card:hover{transform:translateY(-4px)}
-        .kpi-card .label{font-size:16px;color:#7986cb;letter-spacing:2px}
-        .kpi-card .value{font-size:38px;font-weight:700;color:#fff;margin-top:10px}
-        .kpi-card .value.gold{color:#ffd54f}
-        .kpi-card .value.blue{color:#4fc3f7}
-        .kpi-card .value.green{color:#81c784}
-        .kpi-card .value.pink{color:#f48fb1}
-        .kpi-card .value.purple{color:#ce93d8}
-        .kpi-card .value.lightblue{color:#90caf9}
-        .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:25px;margin-bottom:25px}
-        .chart-box{background:rgba(20,22,40,0.8);border-radius:16px;padding:20px;border:1px solid rgba(121,134,203,0.15);box-shadow:0 8px 32px rgba(0,0,0,0.4)}
-        .chart-box.full{grid-column:1/-1}
-        .chart-box .title{font-size:16px;color:#7986cb;padding-bottom:12px;border-bottom:1px solid rgba(121,134,203,0.1);margin-bottom:12px;letter-spacing:2px}
-        .chart-container{width:100%;height:320px}
-        .footer{text-align:center;padding:20px;color:#3a4a7a;font-size:14px;border-top:1px solid rgba(121,134,203,0.1);margin-top:20px}
-    </style>
-</head>
-<body>
-<div class="dashboard">
-    <div class="header"><h1>📊 企业产销量数据大屏</h1><div class="sub">金蝶EAS数据驱动 · 上传即更新</div></div>
-    <div class="upload-area">
-        <div class="left">
-            <div class="icon">📁</div>
-            <div class="info">
-                <div class="title">上传销售数据</div>
-                <div class="desc">支持 .xlsx 格式 · 自动识别日期、销量、金额</div>
-            </div>
-        </div>
-        <div class="right">
-            <span class="file-name" id="fileName">未选择文件</span>
-            <button class="file-btn" onclick="document.getElementById('fileInput').click()">选择文件</button>
-            <input type="file" id="fileInput" class="file-input" accept=".xlsx">
-            <button class="upload-btn" id="uploadBtn" onclick="uploadFile()">上传到系统</button>
-        </div>
-    </div>
-    <div id="uploadStatus" class="upload-status"></div>
-    <div class="kpi-row">
-        <div class="kpi-card"><div class="label">📅 今日销量</div><div class="value gold" id="k1">--</div></div>
-        <div class="kpi-card"><div class="label">📆 本月销量</div><div class="value blue" id="k2">--</div></div>
-        <div class="kpi-card"><div class="label">📈 本年销量</div><div class="value green" id="k3">--</div></div>
-        <div class="kpi-card"><div class="label">💰 今日销售额</div><div class="value pink" id="k4">--</div></div>
-        <div class="kpi-card"><div class="label">💰 本月销售额</div><div class="value purple" id="k5">--</div></div>
-        <div class="kpi-card"><div class="label">💰 本年销售额</div><div class="value lightblue" id="k6">--</div></div>
-    </div>
-    <div class="chart-grid">
-        <div class="chart-box full"><div class="title">📈 日销量趋势</div><div class="chart-container" id="trendChart"></div></div>
-    </div>
-    <div class="chart-grid">
-        <div class="chart-box"><div class="title">📊 月度销量</div><div class="chart-container" id="monthChart"></div></div>
-        <div class="chart-box"><div class="title">📊 年度销量</div><div class="chart-container" id="yearChart"></div></div>
-    </div>
-    <div class="footer">数据来源：金蝶EAS · 上传后自动更新</div>
-</div>
-<script>
-document.getElementById('fileInput').addEventListener('change', function(e){
-    const name = e.target.files[0] ? e.target.files[0].name : '未选择文件';
-    document.getElementById('fileName').textContent = name;
-    document.getElementById('uploadStatus').textContent = '';
-});
-async function uploadFile(){
-    const input = document.getElementById('fileInput');
-    const btn = document.getElementById('uploadBtn');
-    const status = document.getElementById('uploadStatus');
-    if(!input.files || input.files.length === 0){
-        status.className = 'upload-status error';
-        status.textContent = '⚠️ 请先选择一个Excel文件';
-        return;
-    }
-    const file = input.files[0];
-    const formData = new FormData();
-    formData.append('file', file);
-    btn.disabled = true;
-    btn.textContent = '上传中...';
-    status.className = 'upload-status loading';
-    status.textContent = '⏳ 正在上传并解析数据...';
-    try{
-        const resp = await fetch('/upload', {
-            method: 'POST',
-            body: formData
-        });
-        const result = await resp.json();
-        if(result.success){
-            status.className = 'upload-status success';
-            status.textContent = '✅ ' + result.message + '，大屏已自动更新！';
-            fetchData();
-        }else{
-            status.className = 'upload-status error';
-            status.textContent = '❌ 上传失败：' + result.message;
-        }
-    }catch(e){
-        status.className = 'upload-status error';
-        status.textContent = '❌ 网络错误：' + e.message;
-    }finally{
-        btn.disabled = false;
-        btn.textContent = '上传到系统';
-    }
-}
-function fetchData(){
-    fetch('/api/data').then(r=>r.json()).then(data=>{
-        if(!data || data.length === 0){
-            const t = echarts.init(document.getElementById('trendChart'),'dark');
-            t.setOption({title:{text:'暂无数据，请上传Excel',textStyle:{color:'#666',fontSize:20},left:'center',top:'center'}});
-            return;
-        }
-        renderCharts(data);
-    });
-    fetch('/api/summary').then(r=>r.json()).then(d=>{
-        document.getElementById('k1').textContent = d.今日销量.toLocaleString();
-        document.getElementById('k2').textContent = d.本月销量.toLocaleString();
-        document.getElementById('k3').textContent = d.本年销量.toLocaleString();
-        document.getElementById('k4').textContent = d.今日销售额.toLocaleString();
-        document.getElementById('k5').textContent = d.本月销售额.toLocaleString();
-        document.getElementById('k6').textContent = d.本年销售额.toLocaleString();
-    });
-}
-function renderCharts(data){
-    const dates = data.map(d=>d.日期);
-    const sales = data.map(d=>d.总销量);
-    const amts = data.map(d=>d.总销售额);
-    const t = echarts.init(document.getElementById('trendChart'),'dark');
-    t.setOption({
-        tooltip:{trigger:'axis'},
-        legend:{data:['销量','销售额'],textStyle:{color:'#aaa'}},
-        xAxis:{type:'category',data:dates,axisLabel:{color:'#888',fontSize:12}},
-        yAxis:[
-            {type:'value',name:'销量',nameTextStyle:{color:'#888'},axisLabel:{color:'#888'}},
-            {type:'value',name:'销售额',nameTextStyle:{color:'#888'},axisLabel:{color:'#888'}}
-        ],
-        series:[
-            {name:'销量',type:'line',data:sales,smooth:true,lineStyle:{color:'#ffd54f',width:3},areaStyle:{color:'rgba(255,213,79,0.15)'},symbol:'circle',symbolSize:6},
-            {name:'销售额',type:'line',data:amts,smooth:true,yAxisIndex:1,lineStyle:{color:'#4fc3f7',width:3},areaStyle:{color:'rgba(79,195,247,0.15)'},symbol:'circle',symbolSize:6}
-        ],
-        grid:{top:30,bottom:30,left:60,right:60}
-    });
-    window.addEventListener('resize', ()=>t.resize());
-    const last6 = data.slice(-6);
-    const m = echarts.init(document.getElementById('monthChart'),'dark');
-    m.setOption({
-        tooltip:{trigger:'axis'},
-        xAxis:{type:'category',data:last6.map(d=>d.日期.slice(0,7)),axisLabel:{color:'#888'}},
-        yAxis:{type:'value',axisLabel:{color:'#888'}},
-        series:[{type:'bar',data:last6.map(d=>d.总销量),itemStyle:{color:'#4a5fc1',borderRadius:[4,4,0,0]}}],
-        grid:{top:20,bottom:30,left:50,right:20}
-    });
-    window.addEventListener('resize', ()=>m.resize());
-    const y = {};
-    data.forEach(d=>{const yy=d.日期.slice(0,4); y[yy]=(y[yy]||0)+d.总销量});
-    const yc = echarts.init(document.getElementById('yearChart'),'dark');
-    yc.setOption({
-        tooltip:{trigger:'axis'},
-        xAxis:{type:'category',data:Object.keys(y),axisLabel:{color:'#888'}},
-        yAxis:{type:'value',axisLabel:{color:'#888'}},
-        series:[{type:'bar',data:Object.values(y),itemStyle:{color:'#7986cb',borderRadius:[4,4,0,0]}}],
-        grid:{top:20,bottom:30,left:50,right:20}
-    });
-    window.addEventListener('resize', ()=>yc.resize());
-}
-fetchData();
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+content="width=device-width,initial-scale=1.0">
+
+
+<title>
+西瑞集团经营数据驾驶舱
+</title>
+
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js">
 </script>
+
+
+
+<style>
+
+
+/* =============================
+   基础
+============================= */
+
+
+*{
+
+margin:0;
+padding:0;
+box-sizing:border-box;
+
+}
+
+
+body{
+
+
+background:
+
+linear-gradient(
+135deg,
+#071426,
+#0d2340
+);
+
+
+font-family:
+
+"Microsoft YaHei",
+Arial,
+sans-serif;
+
+
+color:white;
+
+
+min-height:100vh;
+
+
+}
+
+
+
+
+.dashboard{
+
+
+width:95%;
+
+max-width:1920px;
+
+margin:auto;
+
+
+padding:25px;
+
+
+}
+
+
+
+
+/* =============================
+顶部
+============================= */
+
+
+.header{
+
+
+height:100px;
+
+
+display:flex;
+
+justify-content:space-between;
+
+align-items:center;
+
+
+border-bottom:
+
+1px solid rgba(255,255,255,.15);
+
+
+}
+
+
+
+.title{
+
+
+font-size:38px;
+
+font-weight:bold;
+
+
+letter-spacing:6px;
+
+
+color:#f3c65a;
+
+
+}
+
+
+
+.subtitle{
+
+
+font-size:16px;
+
+color:#9fb5d1;
+
+
+margin-top:10px;
+
+
+}
+
+
+
+
+.time{
+
+
+font-size:18px;
+
+color:#9fd5ff;
+
+
+}
+
+
+
+
+
+/* =============================
+上传区域
+============================= */
+
+
+.upload-panel{
+
+
+margin-top:25px;
+
+
+background:
+
+rgba(255,255,255,.06);
+
+
+border-radius:15px;
+
+
+padding:20px;
+
+
+display:flex;
+
+justify-content:space-between;
+
+align-items:center;
+
+
+}
+
+
+
+.upload-btn{
+
+
+background:#d8a43a;
+
+border:none;
+
+
+padding:12px 35px;
+
+
+border-radius:8px;
+
+
+font-size:16px;
+
+
+cursor:pointer;
+
+
+font-weight:bold;
+
+
+}
+
+
+
+.upload-btn:hover{
+
+
+opacity:.85;
+
+
+}
+
+
+.file-name{
+
+
+margin-right:20px;
+
+color:#9fd5ff;
+
+
+}
+
+
+
+
+/* =============================
+KPI
+============================= */
+
+
+.kpi-grid{
+
+
+margin-top:25px;
+
+
+display:grid;
+
+
+grid-template-columns:
+
+repeat(6,1fr);
+
+
+gap:20px;
+
+
+}
+
+
+
+.kpi-card{
+
+
+background:
+
+linear-gradient(
+145deg,
+rgba(255,255,255,.10),
+rgba(255,255,255,.03)
+);
+
+
+border-radius:16px;
+
+
+padding:25px;
+
+
+text-align:center;
+
+
+border:
+
+1px solid rgba(255,255,255,.12);
+
+
+}
+
+
+
+.kpi-label{
+
+
+font-size:16px;
+
+color:#9fb5d1;
+
+
+}
+
+
+
+.kpi-value{
+
+
+margin-top:15px;
+
+
+font-size:38px;
+
+
+font-weight:bold;
+
+
+color:#ffffff;
+
+
+}
+
+
+
+.unit{
+
+
+font-size:15px;
+
+
+color:#d8a43a;
+
+
+}
+
+
+
+
+/* =============================
+图表
+============================= */
+
+
+.chart-grid{
+
+
+margin-top:25px;
+
+
+display:grid;
+
+
+grid-template-columns:
+
+2fr 1fr;
+
+
+gap:25px;
+
+
+}
+
+
+
+.chart-box{
+
+
+background:
+
+rgba(255,255,255,.06);
+
+
+border-radius:15px;
+
+
+padding:20px;
+
+
+border:
+
+1px solid rgba(255,255,255,.12);
+
+
+}
+
+
+
+
+.chart-title{
+
+
+font-size:18px;
+
+
+color:#f3c65a;
+
+
+margin-bottom:15px;
+
+
+}
+
+
+
+.chart{
+
+
+height:380px;
+
+
+width:100%;
+
+
+}
+
+
+
+
+
+.small-chart{
+
+
+height:300px;
+
+
+}
+
+
+
+/* =============================
+底部分析
+============================= */
+
+
+.bottom-grid{
+
+
+margin-top:25px;
+
+
+display:grid;
+
+
+grid-template-columns:
+
+1fr 1fr;
+
+
+gap:25px;
+
+
+}
+
+
+
+.rank-box{
+
+
+background:
+
+rgba(255,255,255,.06);
+
+
+border-radius:15px;
+
+
+padding:20px;
+
+
+}
+
+
+
+.rank-item{
+
+
+display:flex;
+
+
+justify-content:space-between;
+
+
+padding:12px 0;
+
+
+border-bottom:
+
+1px solid rgba(255,255,255,.1);
+
+
+color:#ddd;
+
+
+}
+
+
+
+
+.footer{
+
+
+text-align:center;
+
+
+padding:30px;
+
+
+color:#8296b0;
+
+
+font-size:14px;
+
+
+}
+
+
+
+
+@media(max-width:1200px){
+
+
+.kpi-grid{
+
+grid-template-columns:
+
+repeat(3,1fr);
+
+}
+
+
+
+.chart-grid{
+
+grid-template-columns:1fr;
+
+}
+
+
+}
+
+
+
+
+</style>
+
+
+</head>
+
+
+
+
+<body>
+
+
+<div class="dashboard">
+
+
+
+<!-- 顶部 -->
+
+<div class="header">
+
+
+<div>
+
+
+<div class="title">
+
+西瑞集团经营数据驾驶舱
+
+</div>
+
+
+<div class="subtitle">
+
+金蝶EAS · 数据实时分析平台
+
+</div>
+
+
+</div>
+
+
+
+<div class="time" id="clock">
+
+--
+
+</div>
+
+
+</div>
+
+
+
+
+
+<!-- 上传 -->
+
+
+<div class="upload-panel">
+
+
+<div>
+
+
+<h3>
+
+销售数据导入
+
+</h3>
+
+
+<p style="color:#9fb5d1;margin-top:8px">
+
+支持金蝶EAS销售明细Excel自动分析
+
+</p>
+
+
+</div>
+
+
+
+<div>
+
+
+<span id="fileName"
+class="file-name">
+
+未选择文件
+
+</span>
+
+
+
+<input
+
+type="file"
+
+id="fileInput"
+
+accept=".xlsx"
+
+style="display:none">
+
+
+
+<button
+
+class="upload-btn"
+
+onclick="fileInput.click()">
+
+选择Excel
+
+</button>
+
+
+
+<button
+
+class="upload-btn"
+
+onclick="uploadFile()">
+
+上传数据
+
+</button>
+
+
+
+</div>
+
+
+</div>
+
+
+
+
+
+
+<!-- KPI -->
+
+
+<div class="kpi-grid">
+
+
+<div class="kpi-card">
+
+<div class="kpi-label">
+
+今日销量
+
+</div>
+
+<div class="kpi-value" id="k1">
+
+--
+
+</div>
+
+<div class="unit">
+
+吨
+
+</div>
+
+</div>
+
+
+
+
+<div class="kpi-card">
+
+<div class="kpi-label">
+
+本月销量
+
+</div>
+
+<div class="kpi-value" id="k2">
+
+--
+
+</div>
+
+<div class="unit">
+
+吨
+
+</div>
+
+</div>
+
+
+
+
+<div class="kpi-card">
+
+<div class="kpi-label">
+
+本年销量
+
+</div>
+
+<div class="kpi-value" id="k3">
+
+--
+
+</div>
+
+<div class="unit">
+
+吨
+
+</div>
+
+</div>
+
+
+
+
+<div class="kpi-card">
+
+<div class="kpi-label">
+
+今日销售额
+
+</div>
+
+<div class="kpi-value" id="k4">
+
+--
+
+</div>
+
+<div class="unit">
+
+万元
+
+</div>
+
+</div>
+
+
+
+
+<div class="kpi-card">
+
+<div class="kpi-label">
+
+本月销售额
+
+</div>
+
+<div class="kpi-value" id="k5">
+
+--
+
+</div>
+
+<div class="unit">
+
+万元
+
+</div>
+
+</div>
+
+
+
+
+<div class="kpi-card">
+
+<div class="kpi-label">
+
+本年销售额
+
+</div>
+
+<div class="kpi-value" id="k6">
+
+--
+
+</div>
+
+<div class="unit">
+
+万元
+
+</div>
+
+</div>
+
+
+</div>
+
+
+
+
+
+<!-- 图表 -->
+
+
+
+<div class="chart-grid">
+
+
+
+<div class="chart-box">
+
+
+<div class="chart-title">
+
+年度销量趋势
+
+</div>
+
+
+<div id="trendChart"
+class="chart">
+
+</div>
+
+
+</div>
+
+
+
+
+<div class="chart-box">
+
+
+<div class="chart-title">
+
+销售额趋势
+
+</div>
+
+
+<div id="amountChart"
+class="chart">
+
+</div>
+
+
+</div>
+
+
+
+</div>
+
+
+
+
+
+
+<div class="chart-grid">
+
+
+<div class="chart-box">
+
+
+<div class="chart-title">
+
+月度销量分析
+
+</div>
+
+
+<div id="monthChart"
+class="chart small-chart">
+
+</div>
+
+
+</div>
+
+
+
+
+<div class="chart-box">
+
+
+<div class="chart-title">
+
+年度销量分析
+
+</div>
+
+
+<div id="yearChart"
+class="chart small-chart">
+
+</div>
+
+
+</div>
+
+
+
+</div>
+
+
+
+
+
+
+
+<div class="bottom-grid">
+
+
+
+<div class="rank-box">
+
+
+<div class="chart-title">
+
+产品销量TOP10
+
+</div>
+
+
+<div id="productRank">
+
+暂无数据
+
+</div>
+
+
+</div>
+
+
+
+
+<div class="rank-box">
+
+
+<div class="chart-title">
+
+客户销售TOP10
+
+</div>
+
+
+<div id="customerRank">
+
+暂无数据
+
+</div>
+
+
+</div>
+
+
+
+
+</div>
+
+
+
+
+
+<div class="footer">
+
+
+数据来源：金蝶EAS
+
+
+</div>
+
+
+
+</div>
+
+
+
+<script>
+
+
+// 时间
+
+
+setInterval(()=>{
+
+
+document.getElementById("clock")
+.innerHTML =
+new Date()
+.toLocaleString();
+
+
+},1000);
+
+
+
+<script>
+
+
+// =============================
+// 文件选择
+// =============================
+
+
+fileInput.addEventListener(
+"change",
+function(){
+
+if(this.files.length){
+
+fileName.innerHTML =
+this.files[0].name;
+
+}
+
+}
+
+);
+
+
+
+
+// =============================
+// 上传Excel
+// =============================
+
+
+async function uploadFile(){
+
+
+let file =
+fileInput.files[0];
+
+
+if(!file){
+
+alert(
+"请选择Excel文件"
+);
+
+return;
+
+}
+
+
+
+let formData =
+new FormData();
+
+
+formData.append(
+"file",
+file
+);
+
+
+
+try{
+
+
+let res =
+await fetch(
+"/upload",
+{
+
+method:"POST",
+
+body:formData
+
+}
+
+);
+
+
+
+let result =
+await res.json();
+
+
+
+if(result.success){
+
+
+alert(
+"数据导入成功"
+);
+
+
+loadAll();
+
+
+}
+
+else{
+
+
+alert(
+result.message
+);
+
+
+}
+
+
+
+}
+
+catch(e){
+
+
+alert(
+"上传失败："+e
+);
+
+
+}
+
+
+
+}
+
+
+
+
+
+
+// =============================
+// 数字格式化
+// =============================
+
+
+function formatNumber(num){
+
+
+if(!num)
+return 0;
+
+
+return Number(num)
+.toLocaleString();
+
+
+
+}
+
+
+
+
+
+
+
+// =============================
+// 加载KPI
+// =============================
+
+
+async function loadSummary(){
+
+
+
+let res =
+await fetch(
+"/api/summary"
+);
+
+
+
+let d =
+await res.json();
+
+
+
+
+k1.innerHTML =
+formatNumber(
+d.今日销量
+);
+
+
+
+k2.innerHTML =
+formatNumber(
+d.本月销量
+);
+
+
+
+k3.innerHTML =
+formatNumber(
+d.本年销量
+);
+
+
+
+k4.innerHTML =
+formatNumber(
+d.今日销售额/10000
+);
+
+
+
+k5.innerHTML =
+formatNumber(
+d.本月销售额/10000
+);
+
+
+
+k6.innerHTML =
+formatNumber(
+d.本年销售额/10000
+);
+
+
+
+}
+
+
+
+
+
+
+
+
+
+// =============================
+// 通用图表配置
+// =============================
+
+
+function baseOption(){
+
+
+return {
+
+
+backgroundColor:"transparent",
+
+
+
+tooltip:{
+
+
+trigger:"axis",
+
+
+backgroundColor:
+"rgba(0,0,0,.75)",
+
+
+textStyle:{
+
+
+color:"#fff"
+
+}
+
+
+},
+
+
+
+
+grid:{
+
+
+top:60,
+
+bottom:70,
+
+left:90,
+
+right:50,
+
+containLabel:true
+
+
+},
+
+
+
+
+xAxis:{
+
+
+type:"category",
+
+
+axisLine:{
+
+
+lineStyle:{
+
+
+color:"#567"
+
+
+}
+
+
+},
+
+
+axisLabel:{
+
+
+color:"#bdd",
+
+rotate:25
+
+}
+
+
+},
+
+
+
+yAxis:{
+
+
+type:"value",
+
+
+splitLine:{
+
+
+lineStyle:{
+
+
+color:
+"rgba(255,255,255,.1)"
+
+}
+
+},
+
+
+
+axisLabel:{
+
+
+color:"#bdd"
+
+
+}
+
+
+
+}
+
+
+
+
+}
+
+
+
+}
+
+
+
+
+
+
+
+
+// =============================
+// 趋势图
+// =============================
+
+
+async function loadTrend(){
+
+
+
+let res =
+await fetch(
+"/api/data"
+);
+
+
+
+let data =
+await res.json();
+
+
+
+let dates =
+data.map(
+x=>x.日期
+);
+
+
+
+let sales =
+data.map(
+x=>x.总销量
+);
+
+
+
+let amounts =
+data.map(
+x=>x.总销售额/10000
+);
+
+
+
+
+
+let chart =
+echarts.init(
+document.getElementById(
+"trendChart"
+)
+);
+
+
+
+let option =
+baseOption();
+
+
+
+option.series=[{
+
+
+name:"销量",
+
+type:"line",
+
+
+smooth:true,
+
+
+symbol:"circle",
+
+
+symbolSize:8,
+
+
+data:sales,
+
+
+
+lineStyle:{
+
+
+width:4,
+
+
+color:"#d8a43a"
+
+
+},
+
+
+
+areaStyle:{
+
+
+color:
+"rgba(216,164,58,.25)"
+
+}
+
+
+
+}];
+
+
+
+option.xAxis.data =
+dates;
+
+
+
+chart.setOption(
+option
+);
+
+
+
+window.onresize =
+()=>chart.resize();
+
+
+
+}
+
+
+
+
+
+
+
+// =============================
+// 销售额趋势
+// =============================
+
+
+async function loadAmount(){
+
+
+
+let res =
+await fetch(
+"/api/data"
+);
+
+
+
+let data =
+await res.json();
+
+
+
+
+let chart =
+echarts.init(
+document.getElementById(
+"amountChart"
+)
+);
+
+
+
+let option =
+baseOption();
+
+
+
+option.xAxis.data =
+data.map(
+x=>x.日期
+);
+
+
+
+option.series=[{
+
+
+name:"销售额(万元)",
+
+
+type:"bar",
+
+
+data:
+
+data.map(
+x=>
+x.总销售额/10000
+),
+
+
+itemStyle:{
+
+
+color:"#3fa66b",
+
+
+borderRadius:
+[6,6,0,0]
+
+}
+
+
+
+}];
+
+
+
+chart.setOption(
+option
+);
+
+
+
+}
+
+
+
+
+
+
+
+
+// =============================
+// 月度分析
+// =============================
+
+
+async function loadMonth(){
+
+
+
+let data =
+await fetch(
+"/api/data"
+)
+.then(
+r=>r.json()
+);
+
+
+
+let month={};
+
+
+
+data.forEach(
+x=>{
+
+
+let m=
+x.日期.substring(0,7);
+
+
+
+month[m]=
+(month[m]||0)
++
+x.总销量;
+
+
+
+}
+
+);
+
+
+
+let chart =
+echarts.init(
+document.getElementById(
+"monthChart"
+)
+);
+
+
+
+chart.setOption({
+
+
+...baseOption(),
+
+
+xAxis:{
+
+
+type:"category",
+
+
+data:Object.keys(month),
+
+
+axisLabel:{
+color:"#bdd"
+}
+
+
+},
+
+
+series:[{
+
+type:"bar",
+
+data:Object.values(month),
+
+
+itemStyle:{
+
+
+color:"#4da3ff",
+
+
+borderRadius:
+[6,6,0,0]
+
+}
+
+
+}]
+
+
+
+});
+
+
+
+}
+
+
+
+
+
+
+
+// =============================
+// 年度分析
+// =============================
+
+
+async function loadYear(){
+
+
+
+let data =
+await fetch(
+"/api/data"
+)
+.then(
+r=>r.json()
+);
+
+
+
+let year={};
+
+
+
+data.forEach(
+x=>{
+
+
+let y=
+x.日期.substring(0,4);
+
+
+year[y]=
+(year[y]||0)
++
+x.总销量;
+
+
+
+}
+
+);
+
+
+
+
+let chart =
+echarts.init(
+document.getElementById(
+"yearChart"
+)
+);
+
+
+
+chart.setOption({
+
+
+...baseOption(),
+
+
+xAxis:{
+
+
+type:"category",
+
+data:Object.keys(year),
+
+
+axisLabel:{
+color:"#bdd"
+}
+
+
+},
+
+
+
+series:[{
+
+type:"bar",
+
+data:Object.values(year),
+
+
+itemStyle:{
+
+
+color:"#f3c65a",
+
+
+borderRadius:
+[6,6,0,0]
+
+}
+
+
+}]
+
+
+
+});
+
+
+
+}
+
+
+
+
+
+
+
+// =============================
+// 排行榜
+// =============================
+
+
+async function loadRank(){
+
+
+
+let product =
+await fetch(
+"/api/product_rank"
+)
+.then(
+r=>r.json()
+);
+
+
+
+let customer =
+await fetch(
+"/api/customer_rank"
+)
+.then(
+r=>r.json()
+);
+
+
+
+
+productRank.innerHTML =
+product.map(
+(x,i)=>
+
+`
+
+<div class="rank-item">
+
+<span>
+
+${i+1}.
+${x.name}
+
+</span>
+
+
+<b>
+
+${formatNumber(x.value)}
+吨
+
+</b>
+
+
+</div>
+
+
+`
+
+).join("");
+
+
+
+
+customerRank.innerHTML =
+customer.map(
+(x,i)=>
+
+`
+
+<div class="rank-item">
+
+
+<span>
+
+${i+1}.
+${x.name}
+
+</span>
+
+
+<b>
+
+${formatNumber(
+x.value/10000
+)}
+万元
+
+</b>
+
+
+</div>
+
+
+`
+
+).join("");
+
+
+
+}
+
+
+
+
+
+
+
+// =============================
+// 总刷新
+// =============================
+
+
+function loadAll(){
+
+
+loadSummary();
+
+
+loadTrend();
+
+
+loadAmount();
+
+
+loadMonth();
+
+
+loadYear();
+
+
+loadRank();
+
+
+
+}
+
+
+
+
+
+loadAll();
+
+
+
+</script>
+
+
 </body>
+
 </html>
+
 """
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard():
-    return HTMLResponse(HTML_PAGE)
+
+
+
+
+# =====================================================
+# 首页
+# =====================================================
+
+
+@app.get(
+"/",
+response_class=HTMLResponse
+)
+
+def home():
+
+    return HTMLResponse(
+        HTML_PAGE
+    )
+
+
+
+
+
+# =====================================================
+# 启动
+# =====================================================
+
+
+if __name__=="__main__":
+
+
+    import uvicorn
+
+
+    uvicorn.run(
+
+        app,
+
+        host="0.0.0.0",
+
+        port=8000
+
+    )
+
+
+"""
