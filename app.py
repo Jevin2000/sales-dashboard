@@ -637,9 +637,8 @@ def customer_rank():
 
 
 # =====================================================
-# 企业驾驶舱HTML
+# 企业驾驶舱HTML（完整修复版）
 # =====================================================
-
 
 HTML_PAGE = r"""
 
@@ -1665,841 +1664,294 @@ class="chart small-chart">
 
 
 <script>
-
-
-// =============================
-// 时间
-// =============================
-
-setInterval(function(){
-    document.getElementById("clock").innerHTML = new Date().toLocaleString();
-}, 1000);
-
-
-// =============================
-// 文件选择
-// =============================
-
-document.getElementById('fileInput').addEventListener(
-"change",
-function(){
-
-if(this.files.length){
-
-document.getElementById('fileNameDisplay').innerHTML =
-this.files[0].name;
-
-}
-
-}
-
-);
-
-
-
-
-// =============================
-// 上传Excel
-// =============================
-
-
-async function uploadFile(){
-
-
-let file =
-document.getElementById('fileInput').files[0];
-
-
-if(!file){
-
-alert(
-"请选择Excel文件"
-);
-
-return;
-
-}
-
-
-let formData =
-new FormData();
-
-
-formData.append(
-"file",
-file
-);
-
-
-
-try{
-
-
-let res =
-await fetch(
-"/upload",
-{
-
-method:"POST",
-
-body:formData
-
-});
-
-
-
-let result =
-await res.json();
-
-
-
-if(result.success){
-
-
-alert(
-"数据导入成功"
-);
-
-
-loadAll();
-
-
-}
-
-else{
-
-
-alert(
-result.message
-);
-
-
-}
-
-
-
-}
-
-catch(e){
-
-
-alert(
-"上传失败："+e
-);
-
-
-}
-
-
-
-}
-
-
-
-
-
-// =============================
-// 数字格式化
-// =============================
-
-
-function formatNumber(num){
-
-
-if(!num)
-return 0;
-
-
-return Number(num)
-.toLocaleString();
-
-
-
-}
-
-
-
-
-
-// =============================
-// 加载KPI
-// =============================
-
-
-async function loadSummary(){
-
-
-
-let res =
-await fetch(
-"/api/summary"
-);
-
-
-
-let d =
-await res.json();
-
-
-
-document.getElementById('k1').innerHTML =
-formatNumber(
-d.今日销量
-);
-
-
-
-document.getElementById('k2').innerHTML =
-formatNumber(
-d.本月销量
-);
-
-
-
-document.getElementById('k3').innerHTML =
-formatNumber(
-d.本年销量
-);
-
-
-
-document.getElementById('k4').innerHTML =
-formatNumber(
-d.今日销售额/10000
-);
-
-
-
-document.getElementById('k5').innerHTML =
-formatNumber(
-d.本月销售额/10000
-);
-
-
-
-document.getElementById('k6').innerHTML =
-formatNumber(
-d.本年销售额/10000
-);
-
-
-
-}
-
-
-
-
-
-
-
-// =============================
-// 通用图表配置
-// =============================
-
-
-function baseOption(){
-
-
-return {
-
-
-backgroundColor:"transparent",
-
-
-
-tooltip:{
-
-
-trigger:"axis",
-
-
-backgroundColor:
-"rgba(0,0,0,.75)",
-
-
-textStyle:{
-
-
-color:"#fff"
-
-}
-
-
-},
-
-
-
-
-grid:{
-
-
-top:60,
-
-bottom:70,
-
-left:90,
-
-right:50,
-
-containLabel:true
-
-
-},
-
-
-
-
-xAxis:{
-
-
-type:"category",
-
-
-axisLine:{
-
-
-lineStyle:{
-
-
-color:"#567"
-
-
-}
-
-
-},
-
-
-axisLabel:{
-
-
-color:"#bdd",
-
-rotate:25
-
-}
-
-
-},
-
-
-yAxis:{
-
-
-type:"value",
-
-
-splitLine:{
-
-
-lineStyle:{
-
-
-color:
-"rgba(255,255,255,.1)"
-
-}
-
-},
-
-
-
-axisLabel:{
-
-
-color:"#bdd"
-
-
-}
-
-
-
-}
-
-}
-}
-
-
-
-
-
-
-// =============================
-// 趋势图
-// =============================
-
-
-async function loadTrend(){
-
-
-
-let res =
-await fetch(
-"/api/data"
-);
-
-
-
-let data =
-await res.json();
-
-
-
-let dates =
-data.map(
-x=>x.日期
-);
-
-
-
-let sales =
-data.map(
-x=>x.总销量
-);
-
-
-
-let amounts =
-data.map(
-x=>x.总销售额/10000
-);
-
-
-
-
-
-let chart =
-echarts.init(
-document.getElementById(
-"trendChart"
-));
-
-
-
-let option =
-baseOption();
-
-
-
-option.series=[{
-
-
-name:"销量",
-
-type:"line",
-
-
-smooth:true,
-
-
-symbol:"circle",
-
-
-symbolSize:8,
-
-
-data:sales,
-
-
-
-lineStyle:{
-
-
-width:4,
-
-
-color:"#d8a43a"
-
-
-},
-
-
-
-areaStyle:{
-
-
-color:
-"rgba(216,164,58,.25)"
-
-}
-
-
-
-}];
-
-
-
-option.xAxis.data =
-dates;
-
-
-
-chart.setOption(
-option
-);
-
-
-
-window.onresize =
-function(){ chart.resize(); };
-
-
-
-}
-
-
-
-
-
-
-
-
-// =============================
-// 销售额趋势
-// =============================
-
-
-async function loadAmount(){
-
-
-
-let res =
-await fetch(
-"/api/data"
-);
-
-
-
-let data =
-await res.json();
-
-
-
-let chart =
-echarts.init(
-document.getElementById(
-"amountChart"
-));
-
-
-
-let option =
-baseOption();
-
-
-
-option.xAxis.data =
-data.map(
-x=>x.日期
-);
-
-
-
-option.series=[{
-
-
-name:"销售额(万元)",
-
-
-type:"bar",
-
-
-data:
-
-data.map(
-x=>
-x.总销售额/10000
-),
-
-
-itemStyle:{
-
-
-color:"#3fa66b",
-
-
-borderRadius:
-[6,6,0,0]
-
-
-
-}];
-
-
-
-chart.setOption(
-option
-);
-
-
-
-window.onresize =
-function(){ chart.resize(); };
-
-
-}
-
-
-
-
-
-
-
-// =============================
-// 月度分析
-// =============================
-
-
-async function loadMonth(){
-
-
-
-let data =
-await fetch(
-"/api/data"
-)
-.then(
-function(r){ return r.json(); }
-);
-
-
-
-var month={};
-
-
-
-data.forEach(
-function(x){
-
-
-var m=
-x.日期.substring(0,7);
-
-
-
-month[m]=
-(month[m]||0)
-+
-x.总销量;
-
-}
-
-);
-
-
-
-var chart =
-echarts.init(
-document.getElementById(
-"monthChart"
-));
-
-
-
-var opt = baseOption();
-opt.xAxis.data = Object.keys(month);
-opt.series = [{
-type:"bar",
-data:Object.values(month),
-itemStyle:{
-color:"#4da3ff",
-borderRadius:[6,6,0,0]
-}
-}];
-
-
-chart.setOption(opt);
-
-
-
-window.onresize =
-function(){ chart.resize(); };
-
-
-}
-
-
-
-
-
-
-
-// =============================
-// 年度分析
-// =============================
-
-
-async function loadYear(){
-
-
-
-var data =
-await fetch(
-"/api/data"
-)
-.then(
-function(r){ return r.json(); }
-);
-
-
-
-var year={};
-
-
-
-data.forEach(
-function(x){
-
-
-var y=
-x.日期.substring(0,4);
-
-
-year[y]=
-(year[y]||0)
-+
-x.总销量;
-
-}
-
-);
-
-
-
-var chart =
-echarts.init(
-document.getElementById(
-"yearChart"
-));
-
-
-
-var opt = baseOption();
-opt.xAxis.data = Object.keys(year);
-opt.series = [{
-type:"bar",
-data:Object.values(year),
-itemStyle:{
-color:"#f3c65a",
-borderRadius:[6,6,0,0]
-}
-}];
-
-
-chart.setOption(opt);
-
-
-
-window.onresize =
-function(){ chart.resize(); };
-
-
-}
-
-
-
-
-
-
-
-// =============================
-// 排行榜
-// =============================
-
-
-async function loadRank(){
-
-
-
-var product =
-await fetch(
-"/api/product_rank"
-)
-.then(
-function(r){ return r.json(); }
-);
-
-
-
-var customer =
-await fetch(
-"/api/customer_rank"
-)
-.then(
-function(r){ return r.json(); }
-);
-
-
-
-var productHTML = "";
-for(var i=0; i<product.length; i++){
-    productHTML +=
-    '<div class="rank-item">' +
-    '<span>' + (i+1) + '. ' + product[i].name + '</span>' +
-    '<b>' + formatNumber(product[i].value) + ' 吨</b>' +
-    '</div>';
-}
-if(productHTML === ""){
-    productHTML = "暂无数据";
-}
-document.getElementById('productRank').innerHTML = productHTML;
-
-
-
-var customerHTML = "";
-for(var i=0; i<customer.length; i++){
-    customerHTML +=
-    '<div class="rank-item">' +
-    '<span>' + (i+1) + '. ' + customer[i].name + '</span>' +
-    '<b>' + formatNumber(customer[i].value/10000) + ' 万元</b>' +
-    '</div>';
-}
-if(customerHTML === ""){
-    customerHTML = "暂无数据";
-}
-document.getElementById('customerRank').innerHTML = customerHTML;
-
-}
-
-
-
-
-
-
-// =============================
-// 总刷新
-// =============================
-
-
-function loadAll(){
-
-
-loadSummary();
-
-
-loadTrend();
-
-
-loadAmount();
-
-
-loadMonth();
-
-
-loadYear();
-
-
-loadRank();
-
-
-}
-
-
-
-
-loadAll();
-
-
+// ============================================================
+// 完全修复版 JavaScript
+// ============================================================
+
+(function() {
+    "use strict";
+
+    // ---------- 等待DOM加载 ----------
+    document.addEventListener('DOMContentLoaded', function() {
+
+        // ---------- 时钟 ----------
+        function updateClock() {
+            var el = document.getElementById('clock');
+            if (el) {
+                el.innerHTML = new Date().toLocaleString();
+            }
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // ---------- 文件选择显示 ----------
+        var fileInput = document.getElementById('fileInput');
+        var fileNameDisplay = document.getElementById('fileNameDisplay');
+
+        if (fileInput) {
+            fileInput.addEventListener('change', function() {
+                if (this.files && this.files.length > 0) {
+                    if (fileNameDisplay) {
+                        fileNameDisplay.textContent = this.files[0].name;
+                    }
+                } else {
+                    if (fileNameDisplay) {
+                        fileNameDisplay.textContent = '未选择文件';
+                    }
+                }
+            });
+        }
+
+        // ---------- 上传函数（暴露到全局） ----------
+        window.uploadFile = async function() {
+            var input = document.getElementById('fileInput');
+            if (!input || !input.files || input.files.length === 0) {
+                alert('请先选择Excel文件');
+                return;
+            }
+
+            var file = input.files[0];
+            var formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                var response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                var result = await response.json();
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    loadAllData();
+                } else {
+                    alert('❌ 上传失败：' + result.message);
+                }
+            } catch (e) {
+                alert('❌ 网络错误：' + e.message);
+            }
+        };
+
+        // ---------- 工具函数 ----------
+        function formatNumber(num) {
+            if (num === undefined || num === null) return '0';
+            return Number(num).toLocaleString();
+        }
+
+        // ---------- 加载KPI ----------
+        async function loadSummary() {
+            try {
+                var resp = await fetch('/api/summary');
+                var d = await resp.json();
+                var map = {
+                    'k1': d.今日销量,
+                    'k2': d.本月销量,
+                    'k3': d.本年销量,
+                    'k4': d.今日销售额 / 10000,
+                    'k5': d.本月销售额 / 10000,
+                    'k6': d.本年销售额 / 10000
+                };
+                for (var id in map) {
+                    var el = document.getElementById(id);
+                    if (el) {
+                        el.textContent = formatNumber(map[id]);
+                    }
+                }
+            } catch (e) {
+                console.error('加载KPI失败', e);
+            }
+        }
+
+        // ---------- 图表基础配置 ----------
+        function getBaseOption() {
+            return {
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'axis',
+                    backgroundColor: 'rgba(0,0,0,.75)',
+                    textStyle: { color: '#fff' }
+                },
+                grid: {
+                    top: 60,
+                    bottom: 70,
+                    left: 90,
+                    right: 50,
+                    containLabel: true
+                },
+                xAxis: {
+                    type: 'category',
+                    axisLine: { lineStyle: { color: '#567' } },
+                    axisLabel: { color: '#bdd', rotate: 25 }
+                },
+                yAxis: {
+                    type: 'value',
+                    splitLine: { lineStyle: { color: 'rgba(255,255,255,.1)' } },
+                    axisLabel: { color: '#bdd' }
+                }
+            };
+        }
+
+        // ---------- 加载趋势图 ----------
+        async function loadTrend() {
+            try {
+                var resp = await fetch('/api/data');
+                var data = await resp.json();
+                if (!data || data.length === 0) return;
+
+                var dates = data.map(function(item) { return item.日期; });
+                var sales = data.map(function(item) { return item.总销量; });
+
+                var chart = echarts.init(document.getElementById('trendChart'));
+                var opt = getBaseOption();
+                opt.xAxis.data = dates;
+                opt.series = [{
+                    name: '销量',
+                    type: 'line',
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 8,
+                    data: sales,
+                    lineStyle: { width: 4, color: '#d8a43a' },
+                    areaStyle: { color: 'rgba(216,164,58,.25)' }
+                }];
+                chart.setOption(opt);
+                window.addEventListener('resize', function() { chart.resize(); });
+            } catch (e) {
+                console.error('加载趋势图失败', e);
+            }
+        }
+
+        // ---------- 加载销售额趋势 ----------
+        async function loadAmount() {
+            try {
+                var resp = await fetch('/api/data');
+                var data = await resp.json();
+                if (!data || data.length === 0) return;
+
+                var chart = echarts.init(document.getElementById('amountChart'));
+                var opt = getBaseOption();
+                opt.xAxis.data = data.map(function(item) { return item.日期; });
+                opt.series = [{
+                    name: '销售额(万元)',
+                    type: 'bar',
+                    data: data.map(function(item) { return item.总销售额 / 10000; }),
+                    itemStyle: { color: '#3fa66b', borderRadius: [6, 6, 0, 0] }
+                }];
+                chart.setOption(opt);
+                window.addEventListener('resize', function() { chart.resize(); });
+            } catch (e) {
+                console.error('加载销售额趋势失败', e);
+            }
+        }
+
+        // ---------- 加载月度分析 ----------
+        async function loadMonth() {
+            try {
+                var resp = await fetch('/api/data');
+                var data = await resp.json();
+                if (!data || data.length === 0) return;
+
+                var monthMap = {};
+                data.forEach(function(item) {
+                    var m = item.日期.substring(0, 7);
+                    monthMap[m] = (monthMap[m] || 0) + item.总销量;
+                });
+
+                var chart = echarts.init(document.getElementById('monthChart'));
+                var opt = getBaseOption();
+                opt.xAxis.data = Object.keys(monthMap);
+                opt.series = [{
+                    type: 'bar',
+                    data: Object.values(monthMap),
+                    itemStyle: { color: '#4da3ff', borderRadius: [6, 6, 0, 0] }
+                }];
+                chart.setOption(opt);
+                window.addEventListener('resize', function() { chart.resize(); });
+            } catch (e) {
+                console.error('加载月度分析失败', e);
+            }
+        }
+
+        // ---------- 加载年度分析 ----------
+        async function loadYear() {
+            try {
+                var resp = await fetch('/api/data');
+                var data = await resp.json();
+                if (!data || data.length === 0) return;
+
+                var yearMap = {};
+                data.forEach(function(item) {
+                    var y = item.日期.substring(0, 4);
+                    yearMap[y] = (yearMap[y] || 0) + item.总销量;
+                });
+
+                var chart = echarts.init(document.getElementById('yearChart'));
+                var opt = getBaseOption();
+                opt.xAxis.data = Object.keys(yearMap);
+                opt.series = [{
+                    type: 'bar',
+                    data: Object.values(yearMap),
+                    itemStyle: { color: '#f3c65a', borderRadius: [6, 6, 0, 0] }
+                }];
+                chart.setOption(opt);
+                window.addEventListener('resize', function() { chart.resize(); });
+            } catch (e) {
+                console.error('加载年度分析失败', e);
+            }
+        }
+
+        // ---------- 加载排行榜 ----------
+        async function loadRank() {
+            try {
+                var productResp = await fetch('/api/product_rank');
+                var productData = await productResp.json();
+                var customerResp = await fetch('/api/customer_rank');
+                var customerData = await customerResp.json();
+
+                var productHTML = '';
+                if (productData && productData.length > 0) {
+                    for (var i = 0; i < productData.length; i++) {
+                        productHTML += '<div class="rank-item">' +
+                            '<span>' + (i + 1) + '. ' + productData[i].name + '</span>' +
+                            '<b>' + formatNumber(productData[i].value) + ' 吨</b>' +
+                            '</div>';
+                    }
+                } else {
+                    productHTML = '暂无数据';
+                }
+                document.getElementById('productRank').innerHTML = productHTML;
+
+                var customerHTML = '';
+                if (customerData && customerData.length > 0) {
+                    for (var j = 0; j < customerData.length; j++) {
+                        customerHTML += '<div class="rank-item">' +
+                            '<span>' + (j + 1) + '. ' + customerData[j].name + '</span>' +
+                            '<b>' + formatNumber(customerData[j].value / 10000) + ' 万元</b>' +
+                            '</div>';
+                    }
+                } else {
+                    customerHTML = '暂无数据';
+                }
+                document.getElementById('customerRank').innerHTML = customerHTML;
+            } catch (e) {
+                console.error('加载排行榜失败', e);
+            }
+        }
+
+        // ---------- 统一加载函数 ----------
+        window.loadAllData = function() {
+            loadSummary();
+            loadTrend();
+            loadAmount();
+            loadMonth();
+            loadYear();
+            loadRank();
+        };
+
+        // ---------- 启动 ----------
+        loadAllData();
+
+    }); // DOMContentLoaded
+})();
 </script>
 
 
