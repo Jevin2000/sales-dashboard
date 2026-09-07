@@ -4,3 +4,4 @@ pandas
 pymongo
 openpyxl
 python-multipart
+pyarrow
