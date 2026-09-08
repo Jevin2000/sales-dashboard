@@ -18,7 +18,7 @@ from pymongo import MongoClient
 
 app = FastAPI(
     title="西瑞集团经营数据驾驶舱",
-    version="3.0 (优化版)"
+    version="3.1 (修复版)"
 )
 
 
@@ -52,7 +52,7 @@ raw_collection = db["raw_sales"]
 
 
 # =====================================================
-# 智能列识别（升级版）
+# 智能列识别
 # =====================================================
 
 def smart_find_column(columns, keywords, fallback_index=None):
@@ -66,8 +66,7 @@ def smart_find_column(columns, keywords, fallback_index=None):
             if kw.lower() in col_lower:
                 return col
 
-    # 第二轮：正则匹配（如“出库数量”匹配“数量”）
-    # 这里内置一些常见的模式映射
+    # 第二轮：正则匹配
     pattern_map = {
         '日期': r'(日期|时间|date|业务日期|单据日期|下单日期)',
         '数量': r'(数量|销量|出库数量|销售数量|qty|吨)',
@@ -75,7 +74,6 @@ def smart_find_column(columns, keywords, fallback_index=None):
         '产品': r'(产品|物料|商品|品种|名称)',
         '客户': r'(客户|购货单位|单位|往来单位|客户名称)'
     }
-    # 如果 keywords 包含以上关键词之一，使用对应的正则
     for kw in keywords:
         for key, pattern in pattern_map.items():
             if kw.lower() in key or key in kw.lower():
@@ -96,29 +94,19 @@ def smart_find_column(columns, keywords, fallback_index=None):
 # =====================================================
 
 def validate_data(df):
-    """
-    检查数据质量，返回问题列表
-    """
     issues = []
-
-    # 1. 空值检查
     null_counts = df.isnull().sum()
     for col, count in null_counts.items():
         if count > 0:
             issues.append(f"⚠️ {col} 列有 {count} 行空值")
-
-    # 2. 负值检查
     if '销量' in df.columns:
         neg = (df['销量'] < 0).sum()
         if neg > 0:
             issues.append(f"⚠️ 有 {neg} 行销量为负数")
-
     if '销售额' in df.columns:
         neg = (df['销售额'] < 0).sum()
         if neg > 0:
             issues.append(f"⚠️ 有 {neg} 行销售额为负数")
-
-    # 3. 异常值（3倍标准差）
     if '销量' in df.columns and len(df) > 1:
         mean = df['销量'].mean()
         std = df['销量'].std()
@@ -126,95 +114,89 @@ def validate_data(df):
             outliers = ((df['销量'] - mean).abs() > 3 * std).sum()
             if outliers > 0:
                 issues.append(f"⚠️ 有 {outliers} 行销量异常（超出3倍标准差）")
-
-    # 4. 日期范围
-    if '日期' in df.columns:
+    if '日期' in df.columns and not df.empty:
         min_date = df['日期'].min()
         max_date = df['日期'].max()
-        issues.append(f"📅 数据日期范围：{min_date.date()} 至 {max_date.date()}")
-
+        if pd.notna(min_date) and pd.notna(max_date):
+            issues.append(f"📅 数据日期范围：{min_date.date()} 至 {max_date.date()}")
     return issues
 
 
 # =====================================================
-# Excel解析核心（流式分块读取 + 智能识别）
+# Excel解析核心（修复版：先用流式检测，再一次性读取）
 # =====================================================
 
 def parse_excel_streaming(file_content):
     """
-    分块流式读取 Excel，逐块清洗，最后合并
+    分两步解析Excel：
+    1. 先读取前5行识别列名
+    2. 用识别出的列名一次性读取全部数据（使用usecols只读需要的列）
+    
+    这样既实现了「流式检测列名」，又避免了大文件内存溢出（只读需要的列）
     """
-    all_chunks = []
-
-    # 先读取第一块（或前几行）用于识别列位置
-    first_chunk = pd.read_excel(
+    # 第一步：读取前5行识别列名
+    sample_df = pd.read_excel(
         io.BytesIO(file_content),
         nrows=5,
         header=0
     )
-    columns = first_chunk.columns
+    columns = sample_df.columns
 
-    # 智能识别列
-    date_col = smart_find_column(columns, ["日期", "时间", "date", "业务日期"], 0)
-    qty_col = smart_find_column(columns, ["数量", "销量", "出库数量", "qty"], 4)
-    amt_col = smart_find_column(columns, ["金额", "销售额", "价税合计", "amount"], 5)
-    product_col = smart_find_column(columns, ["产品", "物料", "商品"], None)
-    customer_col = smart_find_column(columns, ["客户", "购货单位", "单位"], None)
+    # 智能识别各列位置
+    date_col = smart_find_column(columns, ["日期", "时间", "date", "业务日期", "单据日期"], 0)
+    qty_col = smart_find_column(columns, ["数量", "销量", "出库数量", "销售数量", "qty"], 4)
+    amt_col = smart_find_column(columns, ["金额", "销售额", "价税合计", "含税金额", "amount"], 5)
+    product_col = smart_find_column(columns, ["产品", "物料", "商品", "品种"], None)
+    customer_col = smart_find_column(columns, ["客户", "购货单位", "单位", "往来单位"], None)
 
-    # 确定要读取的列（按位置）
-    # 由于分块读取时只能按索引或列名，我们使用列名列表
+    # 确定要读取的列（通过列名列表，减少内存占用）
     cols_to_read = [date_col, qty_col, amt_col]
     if product_col:
         cols_to_read.append(product_col)
     if customer_col:
         cols_to_read.append(customer_col)
 
-    # 分块读取
-    for chunk in pd.read_excel(
+    # 第二步：只读取需要的列（usecols），大幅减少内存占用
+    df_full = pd.read_excel(
         io.BytesIO(file_content),
-        sheet_name=0,
         usecols=cols_to_read,
-        chunksize=10000,
-        dtype_backend='pyarrow'  # 加快速度，减少内存
-    ):
-        # 重命名列
-        rename_map = {
-            date_col: "日期",
-            qty_col: "销量",
-            amt_col: "销售额"
-        }
-        if product_col:
-            rename_map[product_col] = "产品"
-        if customer_col:
-            rename_map[customer_col] = "客户"
-        chunk = chunk.rename(columns=rename_map)
+        dtype_backend='pyarrow'  # 更快的读取速度
+    )
 
-        # 转换数据类型
-        chunk["日期"] = pd.to_datetime(chunk["日期"], errors='coerce')
-        chunk["销量"] = pd.to_numeric(chunk["销量"], errors='coerce').fillna(0)
-        chunk["销售额"] = pd.to_numeric(chunk["销售额"], errors='coerce').fillna(0)
+    # 重命名列
+    rename_map = {
+        date_col: "日期",
+        qty_col: "销量",
+        amt_col: "销售额"
+    }
+    if product_col:
+        rename_map[product_col] = "产品"
+    if customer_col:
+        rename_map[customer_col] = "客户"
+    df_full = df_full.rename(columns=rename_map)
 
-        # 若没有产品/客户列，填充默认值
-        if product_col is None:
-            chunk["产品"] = "未知产品"
-        if customer_col is None:
-            chunk["客户"] = "未知客户"
+    # 类型转换
+    df_full["日期"] = pd.to_datetime(df_full["日期"], errors='coerce')
+    df_full["销量"] = pd.to_numeric(df_full["销量"], errors='coerce').fillna(0)
+    df_full["销售额"] = pd.to_numeric(df_full["销售额"], errors='coerce').fillna(0)
 
-        # 删除日期无效的行
-        chunk = chunk.dropna(subset=["日期"])
+    # 如果没有产品/客户列，添加默认值
+    if product_col is None:
+        df_full["产品"] = "未知产品"
+    if customer_col is None:
+        df_full["客户"] = "未知客户"
 
-        all_chunks.append(chunk)
+    # 删除日期无效的行
+    df_full = df_full.dropna(subset=["日期"])
 
-    if not all_chunks:
+    if df_full.empty:
         raise ValueError("未读取到有效数据")
 
-    # 合并所有块
-    data = pd.concat(all_chunks, ignore_index=True)
-    return data
+    return df_full
 
 
 # =====================================================
-# 上传Excel接口（优化版）
+# 上传Excel接口
 # =====================================================
 
 @app.post("/upload")
@@ -224,7 +206,7 @@ async def upload_excel(
     try:
         content = await file.read()
 
-        # 流式解析
+        # 解析Excel
         data = parse_excel_streaming(content)
 
         # 数据质量检查
@@ -274,7 +256,7 @@ async def upload_excel(
 
 
 # =====================================================
-# 基础数据接口
+# 数据接口
 # =====================================================
 
 @app.get("/api/data")
@@ -287,10 +269,6 @@ def get_data():
     )
     return data
 
-
-# =====================================================
-# KPI接口
-# =====================================================
 
 @app.get("/api/summary")
 def summary():
@@ -317,10 +295,6 @@ def summary():
     }
 
 
-# =====================================================
-# 产品排行
-# =====================================================
-
 @app.get("/api/product_rank")
 def product_rank():
     data = list(
@@ -343,10 +317,6 @@ def product_rank():
         for k, v in result.items()
     ]
 
-
-# =====================================================
-# 客户排行
-# =====================================================
 
 @app.get("/api/customer_rank")
 def customer_rank():
@@ -371,10 +341,6 @@ def customer_rank():
     ]
 
 
-# =====================================================
-# 自动化分析报告 API
-# =====================================================
-
 @app.get("/api/report")
 def generate_report():
     data = list(collection.find({}, {"_id": 0}))
@@ -385,7 +351,6 @@ def generate_report():
     df["日期"] = pd.to_datetime(df["日期"])
     df_sorted = df.sort_values("日期")
 
-    # 基础统计
     report = {
         "总销量": float(df["总销量"].sum()),
         "总销售额": float(df["总销售额"].sum()),
@@ -397,11 +362,9 @@ def generate_report():
         "最低单日销量日期": df[df["总销量"] == df["总销量"].min()]["日期"].iloc[0].strftime("%Y-%m-%d"),
     }
 
-    # 月度汇总
     monthly = df.groupby(df["日期"].dt.to_period("M"))["总销量"].sum()
     report["月度销量"] = {str(k): float(v) for k, v in monthly.items()}
 
-    # 环比增长率
     if len(monthly) >= 2:
         last = monthly.iloc[-1]
         prev = monthly.iloc[-2]
@@ -413,7 +376,7 @@ def generate_report():
 
 
 # =====================================================
-# 企业驾驶舱HTML（保持不变，使用修复过的版本）
+# 企业驾驶舱HTML
 # =====================================================
 
 HTML_PAGE = r"""
@@ -451,7 +414,6 @@ HTML_PAGE = r"""
         .rank-item{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.1);color:#ddd}
         .footer{text-align:center;padding:30px;color:#8296b0;font-size:14px}
         @media(max-width:1200px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.chart-grid{grid-template-columns:1fr}}
-        /* 数据质量提示样式 */
         .quality-issues{margin-top:15px;padding:15px;background:rgba(255,200,50,.1);border-radius:10px;color:#ffd54f;display:none}
         .quality-issues.show{display:block}
         .quality-issues li{list-style:none;padding:2px 0}
@@ -480,7 +442,6 @@ HTML_PAGE = r"""
         </div>
     </div>
 
-    <!-- 数据质量提示 -->
     <div id="qualityIssues" class="quality-issues"></div>
 
     <div class="kpi-grid">
@@ -512,7 +473,6 @@ HTML_PAGE = r"""
 <script>
 (function(){
     document.addEventListener('DOMContentLoaded', function(){
-        // 时钟
         function updateClock(){
             var el=document.getElementById('clock');
             if(el) el.innerHTML=new Date().toLocaleString();
@@ -544,7 +504,6 @@ HTML_PAGE = r"""
                 var response=await fetch('/upload', {method:'POST', body:formData});
                 var result=await response.json();
                 if(result.success){
-                    // 显示数据质量提示
                     var issuesDiv=document.getElementById('qualityIssues');
                     if(result.issues && result.issues.length>0){
                         var html='<strong>📊 数据质量检查：</strong><ul>';
